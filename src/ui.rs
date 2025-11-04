@@ -1,11 +1,11 @@
-use std::{collections::VecDeque, mem, path::PathBuf, sync::Arc};
+use std::{collections::VecDeque, mem, path::PathBuf, sync::Arc, time::Instant};
 
 use iced::{
-    Length::{self, Fill},
+    Length::{self},
     Task,
     alignment::Vertical,
     task::sipper,
-    widget::{button, column, container, grid, row, scrollable, text, text_input},
+    widget::{button, column, row, scrollable, text, text_input},
 };
 use rfd::{AsyncFileDialog, FileHandle};
 use tokio::io::{AsyncReadExt, BufReader};
@@ -39,6 +39,8 @@ pub struct UI {
     running_search_string: String,
     seperator: char,
     running_seperator: char,
+    start_time: Instant,
+    end_time: Option<Instant>,
     errors: Vec<String>,
     exporting: bool,
     export_message: Option<String>,
@@ -70,6 +72,8 @@ impl UI {
                 exporting: false,
                 export_message: None,
                 export_success: false,
+                start_time: Instant::now(),
+                end_time: None,
             },
             Task::none(),
         )
@@ -104,6 +108,7 @@ impl UI {
                 if let Some(token) = self.cancellation_token.take() {
                     token.cancel();
                 }
+                self.end_time = Some(Instant::now());
                 Task::none()
             }
             Message::Error(err) => {
@@ -133,6 +138,8 @@ impl UI {
                     self.cancellation_token = Some(token.clone());
                     self.running_search_string = self.search_string.clone();
                     self.running_seperator = self.seperator.clone();
+                    self.start_time = Instant::now();
+                    self.end_time = None;
                     self.start_scan(
                         folder.clone(),
                         self.running_search_string.clone(),
@@ -265,7 +272,7 @@ impl UI {
             .spacing(10)
             .align_y(Vertical::Center),
             row![
-                text("Search String:").width(200),
+                text("Search String:").width(150),
                 text_input("", &self.search_string)
                     .on_input(Message::SearchChanged)
                     .on_submit(Message::StartScan)
@@ -274,11 +281,11 @@ impl UI {
             .spacing(10)
             .align_y(Vertical::Center),
             row![
-                text("Seperator:").width(200),
+                text("Seperator:").width(150),
                 text_input("", &self.seperator.to_string())
                     .on_input(Message::SeperatorChanged)
                     .on_submit(Message::StartScan)
-                    .width(Length::Fill),
+                    .width(50),
             ]
             .spacing(10)
             .align_y(Vertical::Center),
@@ -316,8 +323,23 @@ impl UI {
         let mut content = column![main_controls].spacing(20);
 
         if self.cancellation_token.is_some() {
-            content =
-                content.push(text(format!("Scanning... {} bytes searched", self.scanned)).size(16));
+            content = content.push(
+                text(format!(
+                    "Scanning... {} bytes searched in {:.2} seconds",
+                    self.scanned,
+                    Instant::now().duration_since(self.start_time).as_millis() as f64 / 1000.0
+                ))
+                .size(16),
+            );
+        } else if let Some(end) = self.end_time {
+            content = content.push(
+                text(format!(
+                    "Scanned {} bytes in {:.2} seconds",
+                    self.scanned,
+                    end.duration_since(self.start_time).as_millis() as f64 / 1000.0
+                ))
+                .size(16),
+            );
         }
 
         if !self.paths_over_limit.is_empty() {

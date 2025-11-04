@@ -317,7 +317,7 @@ impl UI {
 
         if self.cancellation_token.is_some() {
             content =
-                content.push(text(format!("Scanning... {} paths checked", self.scanned)).size(16));
+                content.push(text(format!("Scanning... {} bytes searched", self.scanned)).size(16));
         }
 
         if !self.paths_over_limit.is_empty() {
@@ -372,7 +372,6 @@ impl UI {
         token: CancellationToken,
     ) -> Task<Message> {
         let sipper = sipper(move |mut sender| async move {
-            let mut scanned: u64 = 0;
             let mut occurences: Vec<Occurence> = Vec::new();
 
             let file = match tokio::fs::File::open(root.as_path()).await {
@@ -398,12 +397,24 @@ impl UI {
             let mut found = VecDeque::<char>::new();
             // which char in the search_chars we're currently on
             let mut compare_index = 0;
+            let mut last_update_sent_bytes = 0u64;
 
             token
                 .run_until_cancelled(async move {
                     // reserved space for a single character
                     let mut unicode_character_bytes = [0u8; 4];
                     loop {
+                        // send periodic updates to GUI
+                        if total_byte_offset - last_update_sent_bytes > 1024 * 1024 {
+                            sender
+                                .send(Message::ScanUpdate {
+                                    now_scanned: total_byte_offset,
+                                    occurences: mem::take(&mut occurences),
+                                })
+                                .await;
+                            last_update_sent_bytes = total_byte_offset;
+                        }
+
                         // read the first byte of the character
                         let first_byte = match reader.read_u8().await {
                             Ok(byte) => byte,
@@ -447,8 +458,6 @@ impl UI {
                                 }
                             }
                         }
-
-                        scanned += len as u64;
 
                         let str = match std::str::from_utf8(&unicode_character_bytes[..len]) {
                             Ok(s) => s,
@@ -516,7 +525,7 @@ impl UI {
 
                     sender
                         .send(Message::ScanUpdate {
-                            now_scanned: scanned,
+                            now_scanned: total_byte_offset,
                             occurences: mem::take(&mut occurences),
                         })
                         .await;
